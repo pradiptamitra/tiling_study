@@ -18,6 +18,74 @@ import json
 import os
 import sys
 from typing import Tuple, Dict, List
+from numba import jit
+
+
+@jit(nopython=True)
+def _naive_multiply_jit(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """Pure Python naive matrix multiplication compiled with Numba."""
+    n = A.shape[0]
+    C = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            for k in range(n):
+                C[i, j] += A[i, k] * B[k, j]
+    return C
+
+
+@jit(nopython=True)
+def _tiled_multiply_jit(A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
+    """
+    Tiled matrix multiplication compiled with Numba (C-tile-focused).
+
+    Strategy: For each output tile C, load all required A and B tiles to complete it.
+    This keeps the output tile hot in cache while streaming through inputs.
+    """
+    n = A.shape[0]
+    C = np.zeros((n, n))
+
+    for i_tile in range(0, n, tile_size):
+        for j_tile in range(0, n, tile_size):
+            for k_tile in range(0, n, tile_size):
+                i_end = min(i_tile + tile_size, n)
+                j_end = min(j_tile + tile_size, n)
+                k_end = min(k_tile + tile_size, n)
+
+                for i in range(i_tile, i_end):
+                    for j in range(j_tile, j_end):
+                        for k in range(k_tile, k_end):
+                            C[i, j] += A[i, k] * B[k, j]
+
+    return C
+
+
+@jit(nopython=True)
+def _tiled_multiply_a_focused_jit(A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
+    """
+    Tiled matrix multiplication compiled with Numba (A-tile-focused).
+
+    Strategy: For each A tile, keep it hot in cache and stream through all B tiles,
+    updating the corresponding output tiles. This maximizes reuse of each A tile.
+    """
+    n = A.shape[0]
+    C = np.zeros((n, n))
+
+    for i_tile in range(0, n, tile_size):
+        for k_tile in range(0, n, tile_size):
+            # Keep this A tile "hot" in cache
+            i_end = min(i_tile + tile_size, n)
+            k_end = min(k_tile + tile_size, n)
+
+            # Iterate through all B tiles and corresponding C tiles
+            for j_tile in range(0, n, tile_size):
+                j_end = min(j_tile + tile_size, n)
+
+                for i in range(i_tile, i_end):
+                    for j in range(j_tile, j_end):
+                        for k in range(k_tile, k_end):
+                            C[i, j] += A[i, k] * B[k, j]
+
+    return C
 
 
 class CacheDetector:
@@ -64,8 +132,8 @@ class CacheDetector:
         """Get cache sizes on macOS using sysctl."""
         cache_sizes = {}
         try:
-            # L1 instruction cache
-            result = subprocess.run(['sysctl', 'hw.l1icachesize'],
+            # L1 data cache
+            result = subprocess.run(['sysctl', 'hw.l1dcachesize'],
                                   capture_output=True, text=True)
             if result.returncode == 0:
                 cache_sizes['L1'] = int(result.stdout.split(':')[1].strip())
@@ -120,56 +188,48 @@ class MatrixTilingStudy:
         self.results = {}
 
     def _naive_multiply(self, A: np.ndarray, B: np.ndarray) -> np.ndarray:
-        """Standard matrix multiplication (ijk order)."""
-        n = A.shape[0]
-        C = np.zeros((n, n))
-        for i in range(n):
-            for j in range(n):
-                for k in range(n):
-                    C[i, j] += A[i, k] * B[k, j]
-        return C
+        """Standard matrix multiplication (ijk order) - uses Numba JIT."""
+        return _naive_multiply_jit(A, B)
 
     def _tiled_multiply(self, A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
         """
-        Tiled matrix multiplication with specified tile size.
+        Tiled matrix multiplication with specified tile size - uses Numba JIT (C-tile-focused).
 
         Multiplies blocks of size tile_size x tile_size to improve cache locality.
         """
-        n = A.shape[0]
-        C = np.zeros((n, n))
+        return _tiled_multiply_jit(A, B, tile_size)
 
-        # Process matrix in tiles
-        for i_tile in range(0, n, tile_size):
-            for j_tile in range(0, n, tile_size):
-                for k_tile in range(0, n, tile_size):
-                    # Determine actual tile boundaries (handle edge cases)
-                    i_end = min(i_tile + tile_size, n)
-                    j_end = min(j_tile + tile_size, n)
-                    k_end = min(k_tile + tile_size, n)
+    def _tiled_multiply_a_focused(self, A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
+        """
+        Tiled matrix multiplication with specified tile size - uses Numba JIT (A-tile-focused).
 
-                    # Multiply tiles
-                    C[i_tile:i_end, j_tile:j_end] += \
-                        A[i_tile:i_end, k_tile:k_end] @ B[k_tile:k_end, j_tile:j_end]
+        Keeps A tiles hot in cache while streaming through B tiles.
+        """
+        return _tiled_multiply_a_focused_jit(A, B, tile_size)
 
-        return C
-
-    def run_experiment(self, tile_sizes: List[int], num_runs: int = 3) -> Dict:
+    def run_experiment(self, tile_sizes: List[int], num_runs: int = 3, mode: str = 'c_focused') -> Dict:
         """
         Run tiling experiment with various tile sizes.
 
         Args:
             tile_sizes: List of tile sizes to test
             num_runs: Number of runs per tile size (for averaging)
+            mode: Tiling strategy - 'c_focused', 'a_focused', or 'both'
 
         Returns:
             Dictionary with results
         """
+        if mode == 'both':
+            return self._run_both_experiments(tile_sizes, num_runs)
+
+        mode_name = "C-tile-focused" if mode == 'c_focused' else "A-tile-focused"
+
         print(f"\n{'='*70}")
-        print(f"Matrix Tiling Performance Study")
+        print(f"Matrix Tiling Performance Study ({mode_name})")
         print(f"{'='*70}")
         print(f"Matrix size: {self.matrix_size} x {self.matrix_size}")
         print(f"Number of runs per tile size: {num_runs}")
-        print(f"Total operations per multiplication: {self.matrix_size**3 * 2 / 1e9:.2f} billion FLOPs")
+        print(f"Strategy: {mode_name}")
         print(f"\n{'='*70}")
         print(f"Cache Information:")
         print(f"{'='*70}")
@@ -188,13 +248,12 @@ class MatrixTilingStudy:
         print(f"\n{'='*70}")
         print(f"Performance Results:")
         print(f"{'='*70}")
-        print(f"{'Tile Size':<15} {'Avg Time (s)':<15} {'GFLOPs/s':<15} {'Cache-Optimal':<20}")
-        print(f"{'-'*70}")
+        print(f"{'Tile Size':<15} {'Avg Time (s)':<15} {'Cache-Optimal':<20}")
+        print(f"{'-'*65}")
 
         results = {
             'tile_sizes': [],
             'times': [],
-            'gflops': [],
             'time_std': []
         }
 
@@ -202,10 +261,84 @@ class MatrixTilingStudy:
         A = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
         B = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
 
+        # Select multiply function based on mode
+        multiply_func = self._tiled_multiply if mode == 'c_focused' else self._tiled_multiply_a_focused
+
         # Test each tile size
         for tile_size in tile_sizes:
             times = []
 
+            for run in range(num_runs):
+                start = time.perf_counter()
+                C = multiply_func(A, B, tile_size)
+                end = time.perf_counter()
+                times.append(end - start)
+
+            avg_time = np.mean(times)
+            std_time = np.std(times)
+
+            # Estimate cache optimality
+            cache_optimal = self._estimate_cache_optimality(tile_size)
+
+            results['tile_sizes'].append(tile_size)
+            results['times'].append(avg_time)
+            results['time_std'].append(std_time)
+
+            print(f"{tile_size:<15} {avg_time:<15.6f} {cache_optimal:<20}")
+
+        self.results = results
+        return results
+
+    def _run_both_experiments(self, tile_sizes: List[int], num_runs: int = 3) -> Dict:
+        """
+        Run experiments for both tiling strategies.
+
+        Args:
+            tile_sizes: List of tile sizes to test
+            num_runs: Number of runs per tile size (for averaging)
+
+        Returns:
+            Dictionary with results for both strategies
+        """
+        print(f"\n{'='*70}")
+        print(f"Matrix Tiling Performance Study (Comparing Both Strategies)")
+        print(f"{'='*70}")
+        print(f"Matrix size: {self.matrix_size} x {self.matrix_size}")
+        print(f"Number of runs per tile size: {num_runs}")
+        print(f"\n{'='*70}")
+        print(f"Cache Information:")
+        print(f"{'='*70}")
+
+        if self.cache_sizes:
+            for level, size in sorted(self.cache_sizes.items()):
+                size_kb = size / 1024
+                size_mb = size / (1024 * 1024)
+                if size_mb >= 1:
+                    print(f"{level} Cache: {size_mb:.2f} MB ({size} bytes)")
+                else:
+                    print(f"{level} Cache: {size_kb:.2f} KB ({size} bytes)")
+        else:
+            print("Could not detect cache sizes on this system.")
+
+        # Create test matrices (same for both experiments)
+        A = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
+        B = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
+
+        results = {
+            'tile_sizes': [],
+            'c_focused': {'times': [], 'time_std': []},
+            'a_focused': {'times': [], 'time_std': []}
+        }
+
+        print(f"\n{'='*70}")
+        print(f"Running C-tile-focused strategy...")
+        print(f"{'='*70}")
+        print(f"{'Tile Size':<15} {'Avg Time (s)':<15} {'Cache-Optimal':<20}")
+        print(f"{'-'*65}")
+
+        # Run C-focused experiments
+        for tile_size in tile_sizes:
+            times = []
             for run in range(num_runs):
                 start = time.perf_counter()
                 C = self._tiled_multiply(A, B, tile_size)
@@ -214,17 +347,37 @@ class MatrixTilingStudy:
 
             avg_time = np.mean(times)
             std_time = np.std(times)
-            gflops = (self.matrix_size ** 3 * 2 / 1e9) / avg_time
-
-            # Estimate cache optimality
             cache_optimal = self._estimate_cache_optimality(tile_size)
 
             results['tile_sizes'].append(tile_size)
-            results['times'].append(avg_time)
-            results['time_std'].append(std_time)
-            results['gflops'].append(gflops)
+            results['c_focused']['times'].append(avg_time)
+            results['c_focused']['time_std'].append(std_time)
 
-            print(f"{tile_size:<15} {avg_time:<15.6f} {gflops:<15.2f} {cache_optimal:<20}")
+            print(f"{tile_size:<15} {avg_time:<15.6f} {cache_optimal:<20}")
+
+        print(f"\n{'='*70}")
+        print(f"Running A-tile-focused strategy...")
+        print(f"{'='*70}")
+        print(f"{'Tile Size':<15} {'Avg Time (s)':<15} {'Cache-Optimal':<20}")
+        print(f"{'-'*65}")
+
+        # Run A-focused experiments
+        for i, tile_size in enumerate(tile_sizes):
+            times = []
+            for run in range(num_runs):
+                start = time.perf_counter()
+                C = self._tiled_multiply_a_focused(A, B, tile_size)
+                end = time.perf_counter()
+                times.append(end - start)
+
+            avg_time = np.mean(times)
+            std_time = np.std(times)
+            cache_optimal = self._estimate_cache_optimality(tile_size)
+
+            results['a_focused']['times'].append(avg_time)
+            results['a_focused']['time_std'].append(std_time)
+
+            print(f"{tile_size:<15} {avg_time:<15.6f} {cache_optimal:<20}")
 
         self.results = results
         return results
@@ -252,49 +405,57 @@ class MatrixTilingStudy:
         else:
             return "Spills cache"
 
-    def plot_results(self, output_file: str = 'tiling_performance.png'):
+    def plot_results(self, output_file: str = 'tiling_performance.png', mode: str = 'c_focused'):
         """
         Generate visualization of tiling performance.
 
         Args:
             output_file: Path to save the plot
+            mode: Tiling strategy - 'c_focused', 'a_focused', or 'both'
         """
         if not self.results:
             print("No results to plot. Run experiment first.")
             return
 
-        tile_sizes = self.results['tile_sizes']
-        times = self.results['times']
-        gflops = self.results['gflops']
-        time_std = self.results['time_std']
+        fig, ax = plt.subplots(figsize=(12, 6))
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+        # Check if we have results for both strategies
+        if mode == 'both' and 'c_focused' in self.results:
+            # Plot both strategies
+            tile_sizes = self.results['tile_sizes']
 
-        # Plot 1: Execution time vs tile size
-        ax1.errorbar(tile_sizes, times, yerr=time_std, fmt='o-', linewidth=2,
-                     markersize=8, capsize=5, label='Execution Time')
-        ax1.set_xlabel('Tile Size (elements)', fontsize=12, fontweight='bold')
-        ax1.set_ylabel('Time (seconds)', fontsize=12, fontweight='bold')
-        ax1.set_title(f'Matrix Multiplication Time vs Tile Size\n(Matrix: {self.matrix_size}x{self.matrix_size})',
-                     fontsize=14, fontweight='bold')
-        ax1.grid(True, alpha=0.3)
-        ax1.set_xscale('log')
+            # Plot C-focused
+            c_times = self.results['c_focused']['times']
+            c_std = self.results['c_focused']['time_std']
+            ax.errorbar(tile_sizes, c_times, yerr=c_std, fmt='o-', linewidth=2,
+                         markersize=8, capsize=5, label='C-tile-focused', color='blue')
+
+            # Plot A-focused
+            a_times = self.results['a_focused']['times']
+            a_std = self.results['a_focused']['time_std']
+            ax.errorbar(tile_sizes, a_times, yerr=a_std, fmt='s-', linewidth=2,
+                         markersize=8, capsize=5, label='A-tile-focused', color='red')
+
+            title = f'Matrix Multiplication Time vs Tile Size (Both Strategies)\n(Matrix: {self.matrix_size}x{self.matrix_size})'
+        else:
+            # Plot single strategy
+            mode_name = "C-tile-focused" if mode == 'c_focused' else "A-tile-focused"
+            tile_sizes = self.results['tile_sizes']
+            times = self.results['times']
+            time_std = self.results['time_std']
+
+            ax.errorbar(tile_sizes, times, yerr=time_std, fmt='o-', linewidth=2,
+                         markersize=8, capsize=5, label='Execution Time')
+            title = f'Matrix Multiplication Time vs Tile Size ({mode_name})\n(Matrix: {self.matrix_size}x{self.matrix_size})'
+
+        ax.set_xlabel('Tile Size (elements)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Time (seconds)', fontsize=12, fontweight='bold')
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.set_xscale('log')
 
         # Add cache size markers
-        self._add_cache_markers(ax1, 'time')
-
-        # Plot 2: GFLOPs vs tile size
-        ax2.plot(tile_sizes, gflops, 'o-', linewidth=2, markersize=8,
-                color='green', label='GFLOPs/s')
-        ax2.set_xlabel('Tile Size (elements)', fontsize=12, fontweight='bold')
-        ax2.set_ylabel('Performance (GFLOPs/s)', fontsize=12, fontweight='bold')
-        ax2.set_title(f'Peak Performance vs Tile Size',
-                     fontsize=14, fontweight='bold')
-        ax2.grid(True, alpha=0.3)
-        ax2.set_xscale('log')
-
-        # Add cache size markers
-        self._add_cache_markers(ax2, 'performance')
+        self._add_cache_markers(ax, 'time')
 
         plt.tight_layout()
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
@@ -315,8 +476,9 @@ class MatrixTilingStudy:
         for level in ['L1', 'L2', 'L3']:
             if level in self.cache_sizes:
                 cache_bytes = self.cache_sizes[level]
-                # Estimate tile size that fits in cache (assuming 3 tiles of tile_size^2: A, B, C)
-                optimal_tile = int(np.sqrt(cache_bytes / 12))
+                # Estimate tile size that fits in cache
+                # Same logic as _estimate_cache_optimality: 3 tiles * tile_size² * 4 bytes <= cache * 0.5
+                optimal_tile = int(np.sqrt(cache_bytes * 0.5 / (3 * 4)))
 
                 ax.axvline(x=optimal_tile, color=colors[level], linestyle='--',
                           linewidth=2, alpha=0.7, label=f'{level} optimal (~{optimal_tile})')
@@ -326,31 +488,69 @@ class MatrixTilingStudy:
 
 def main():
     """Main entry point."""
-    # Matrix size - adjust based on your system's memory
-    MATRIX_SIZE = 512  # 512x512 matrix (can increase for larger systems)
+    # Configuration
+    MATRIX_SIZE = 1024  # Matrix size - adjust based on your system's memory
+
+    # Tiling strategy: 'c_focused', 'a_focused', or 'both'
+    MODE = 'both'  # Change to compare both strategies
 
     # Tile sizes to test
     # Start small and go up to the full matrix size
-    tile_sizes = [4, 8, 16, 32, 64, 128, 256, 512]
+    tile_sizes = [1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
 
     # Create and run study
     study = MatrixTilingStudy(matrix_size=MATRIX_SIZE)
-    results = study.run_experiment(tile_sizes, num_runs=3)
+    results = study.run_experiment(tile_sizes, num_runs=3, mode=MODE)
 
     # Generate visualization
-    study.plot_results('tiling_performance.png')
+    output_filename = f'tiling_performance_{MODE}.png'
+    study.plot_results(output_filename, mode=MODE)
 
     # Print summary
     print(f"\n{'='*70}")
     print(f"Summary:")
     print(f"{'='*70}")
-    best_idx = np.argmin(results['times'])
-    print(f"Best performance: Tile size {results['tile_sizes'][best_idx]} "
-          f"({results['gflops'][best_idx]:.2f} GFLOPs/s)")
-    print(f"Baseline (tile_size=matrix_size): {results['gflops'][-1]:.2f} GFLOPs/s")
-    if results['gflops'][best_idx] > results['gflops'][-1]:
-        improvement = (results['gflops'][best_idx] / results['gflops'][-1] - 1) * 100
-        print(f"Improvement over naive: {improvement:.1f}%")
+
+    if MODE == 'both':
+        # Summary for both strategies
+        c_times = results['c_focused']['times']
+        a_times = results['a_focused']['times']
+
+        c_best_idx = np.argmin(c_times)
+        a_best_idx = np.argmin(a_times)
+
+        print(f"\nC-tile-focused:")
+        print(f"  Best performance: Tile size {results['tile_sizes'][c_best_idx]} ({c_times[c_best_idx]:.6f}s)")
+        print(f"  Baseline (tile_size=matrix_size): {c_times[-1]:.6f}s")
+        if c_times[c_best_idx] < c_times[-1]:
+            improvement = (c_times[-1] / c_times[c_best_idx] - 1) * 100
+            print(f"  Speedup from optimal tiling: {improvement:.1f}%")
+
+        print(f"\nA-tile-focused:")
+        print(f"  Best performance: Tile size {results['tile_sizes'][a_best_idx]} ({a_times[a_best_idx]:.6f}s)")
+        print(f"  Baseline (tile_size=matrix_size): {a_times[-1]:.6f}s")
+        if a_times[a_best_idx] < a_times[-1]:
+            improvement = (a_times[-1] / a_times[a_best_idx] - 1) * 100
+            print(f"  Speedup from optimal tiling: {improvement:.1f}%")
+
+        # Compare best of each
+        print(f"\nComparison:")
+        if c_times[c_best_idx] < a_times[a_best_idx]:
+            diff = (a_times[a_best_idx] / c_times[c_best_idx] - 1) * 100
+            print(f"  C-tile-focused is {diff:.1f}% faster at optimal tile size")
+        else:
+            diff = (c_times[c_best_idx] / a_times[a_best_idx] - 1) * 100
+            print(f"  A-tile-focused is {diff:.1f}% faster at optimal tile size")
+    else:
+        # Summary for single strategy
+        best_idx = np.argmin(results['times'])
+        baseline_time = results['times'][-1]
+        best_time = results['times'][best_idx]
+        print(f"Best performance: Tile size {results['tile_sizes'][best_idx]} ({best_time:.6f}s)")
+        print(f"Baseline (tile_size=matrix_size): {baseline_time:.6f}s")
+        if best_time < baseline_time:
+            improvement = (baseline_time / best_time - 1) * 100
+            print(f"Speedup from optimal tiling: {improvement:.1f}%")
 
 
 if __name__ == '__main__':
