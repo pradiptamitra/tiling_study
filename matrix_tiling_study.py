@@ -21,7 +21,7 @@ from typing import Tuple, Dict, List
 from numba import jit
 
 
-@jit(nopython=True)
+@jit(nopython=True, fastmath=False, parallel=False)
 def _tiled_multiply_jit(A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
     """
     Tiled matrix multiplication compiled with Numba (C-tile-focused).
@@ -47,7 +47,7 @@ def _tiled_multiply_jit(A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndar
     return C
 
 
-@jit(nopython=True)
+@jit(nopython=True, fastmath=False, parallel=False)
 def _tiled_multiply_a_focused_jit(A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
     """
     Tiled matrix multiplication compiled with Numba (A-tile-focused).
@@ -473,9 +473,8 @@ class MatrixTilingStudy:
 def main():
     """Main entry point."""
     # Configuration
-    MATRIX_SIZE = 1024
     MODE = 'standard'  # 'standard', 'a_focused', or 'both'
-
+    MATRIX_SIZE = 4096
     # Generate tile sizes as powers of 2 from 1 to MATRIX_SIZE
     tile_sizes = [2**i for i in range(int(np.log2(MATRIX_SIZE)) + 1)]
     print(f"Testing tile sizes: {min(tile_sizes)} to {max(tile_sizes)} (powers of 2)")
