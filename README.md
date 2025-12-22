@@ -1,6 +1,6 @@
 # Matrix Tiling Study
 
-A comprehensive Python study demonstrating how tiling (blocking) improves memory access performance in matrix multiplication through better cache locality. This project compares two different tiling strategies and analyzes their performance characteristics.
+A Python study demonstrating how tiling (blocking) improves memory access performance in matrix multiplication through better cache locality. Since Numba does it's own optimization, this study is approximate and should be taken with a grain of salt.
 
 ## Overview
 
@@ -14,11 +14,8 @@ The study implements and compares two tiling strategies:
 
 - **Automatic Cache Detection**: Detects L1 data cache, L2, and L3 cache sizes on Linux, macOS, and Windows
 - **JIT Compilation**: Uses Numba for high-performance JIT compilation
-- **Dual Strategy Comparison**: Compare standard vs A-focused tiling strategies
-- **Performance Measurement**: Measures execution time for different tile sizes
 - **Cache-Aware Analysis**: Determines if each tile size optimally fits in L1, L2, or L3 cache
-- **Beautiful Visualizations**: Generates plots with cache-size annotations showing where performance peaks relative to your system's cache hierarchy
-- **Statistical Analysis**: Runs multiple iterations and reports mean/std dev timing data
+- **Visualizations**: Generates plots with cache-size annotations showing where performance peaks relative to your system's cache hierarchy
 
 ## How Tiling Works
 
@@ -207,25 +204,6 @@ Comparison:
 4. **Large tile sizes** (128+): Data spills from smaller caches, performance degrades
 5. **Baseline** (tile_size = matrix_size): No tiling benefit, equivalent to naive approach
 
-### Strategy Comparison
-
-- **Standard (C-tile-focused)**: Generally performs better due to:
-  - Each output tile written once
-  - Better cache reuse of output accumulator
-  - Less memory bandwidth consumption
-
-- **A-tile-focused**: Often comparable performance, but:
-  - Output tiles may be loaded/stored multiple times
-  - Potential cache thrashing if many output tiles
-  - May perform better on certain architectures
-
-The optimal tile size depends on:
-- Your CPU's cache hierarchy
-- Cache line size and associativity
-- The matrix size
-- Memory bandwidth vs compute speed
-- Compiler/JIT optimizations
-
 ## Performance Notes
 
 This implementation uses Numba JIT compilation for high performance. The JIT compiler applies aggressive optimizations including:
@@ -233,15 +211,3 @@ This implementation uses Numba JIT compilation for high performance. The JIT com
 - Register allocation
 - Memory access pattern optimization
 
-For very small matrices or when the working set fits entirely in cache, tiling overhead may outweigh benefits. Tiling shows greatest advantage when:
-- Matrix size exceeds cache capacity
-- Memory bandwidth is the bottleneck
-- Working with larger matrices (2048×2048 and above)
-
-## Implementation Details
-
-- All matrix multiplication kernels are JIT-compiled with Numba
-- L1 **data** cache is correctly detected (not instruction cache)
-- Cache optimal tile size formula: `tile_size = sqrt(cache_size * 0.5 / (3 * 4))`
-- Boundary handling with `min()` for non-evenly divisible matrices
-- Statistical reporting with mean and standard deviation across multiple runs

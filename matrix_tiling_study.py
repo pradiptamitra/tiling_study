@@ -473,7 +473,7 @@ class MatrixTilingStudy:
 def main():
     """Main entry point."""
     # Configuration
-    MODE = 'standard'  # 'standard', 'a_focused', or 'both'
+    MODE = 'both'  # 'standard', 'a_focused', or 'both'
     MATRIX_SIZE = 4096
     # Generate tile sizes as powers of 2 from 1 to MATRIX_SIZE
     tile_sizes = [2**i for i in range(int(np.log2(MATRIX_SIZE)) + 1)]
