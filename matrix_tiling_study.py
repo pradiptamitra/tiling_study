@@ -22,18 +22,6 @@ from numba import jit
 
 
 @jit(nopython=True)
-def _naive_multiply_jit(A: np.ndarray, B: np.ndarray) -> np.ndarray:
-    """Pure Python naive matrix multiplication compiled with Numba."""
-    n = A.shape[0]
-    C = np.zeros((n, n))
-    for i in range(n):
-        for j in range(n):
-            for k in range(n):
-                C[i, j] += A[i, k] * B[k, j]
-    return C
-
-
-@jit(nopython=True)
 def _tiled_multiply_jit(A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
     """
     Tiled matrix multiplication compiled with Numba (C-tile-focused).
@@ -187,10 +175,6 @@ class MatrixTilingStudy:
         self.cache_sizes = CacheDetector.get_cache_sizes()
         self.results = {}
 
-    def _naive_multiply(self, A: np.ndarray, B: np.ndarray) -> np.ndarray:
-        """Standard matrix multiplication (ijk order) - uses Numba JIT."""
-        return _naive_multiply_jit(A, B)
-
     def _tiled_multiply(self, A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
         """
         Tiled matrix multiplication with specified tile size - uses Numba JIT (C-tile-focused).
@@ -207,14 +191,14 @@ class MatrixTilingStudy:
         """
         return _tiled_multiply_a_focused_jit(A, B, tile_size)
 
-    def run_experiment(self, tile_sizes: List[int], num_runs: int = 3, mode: str = 'c_focused') -> Dict:
+    def run_experiment(self, tile_sizes: List[int], num_runs: int = 3, mode: str = 'standard') -> Dict:
         """
         Run tiling experiment with various tile sizes.
 
         Args:
             tile_sizes: List of tile sizes to test
             num_runs: Number of runs per tile size (for averaging)
-            mode: Tiling strategy - 'c_focused', 'a_focused', or 'both'
+            mode: Tiling strategy - 'standard', 'a_focused', or 'both'
 
         Returns:
             Dictionary with results
@@ -222,7 +206,7 @@ class MatrixTilingStudy:
         if mode == 'both':
             return self._run_both_experiments(tile_sizes, num_runs)
 
-        mode_name = "C-tile-focused" if mode == 'c_focused' else "A-tile-focused"
+        mode_name = "Standard (C-tile-focused)" if mode == 'standard' else "A-tile-focused"
 
         print(f"\n{'='*70}")
         print(f"Matrix Tiling Performance Study ({mode_name})")
@@ -245,6 +229,10 @@ class MatrixTilingStudy:
         else:
             print("Could not detect cache sizes on this system.")
 
+        # Create test matrices
+        A = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
+        B = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
+
         print(f"\n{'='*70}")
         print(f"Performance Results:")
         print(f"{'='*70}")
@@ -257,12 +245,8 @@ class MatrixTilingStudy:
             'time_std': []
         }
 
-        # Create test matrices
-        A = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
-        B = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
-
         # Select multiply function based on mode
-        multiply_func = self._tiled_multiply if mode == 'c_focused' else self._tiled_multiply_a_focused
+        multiply_func = self._tiled_multiply if mode == 'standard' else self._tiled_multiply_a_focused
 
         # Test each tile size
         for tile_size in tile_sizes:
@@ -326,17 +310,17 @@ class MatrixTilingStudy:
 
         results = {
             'tile_sizes': [],
-            'c_focused': {'times': [], 'time_std': []},
+            'standard': {'times': [], 'time_std': []},
             'a_focused': {'times': [], 'time_std': []}
         }
 
         print(f"\n{'='*70}")
-        print(f"Running C-tile-focused strategy...")
+        print(f"Running Standard (C-tile-focused) strategy...")
         print(f"{'='*70}")
         print(f"{'Tile Size':<15} {'Avg Time (s)':<15} {'Cache-Optimal':<20}")
         print(f"{'-'*65}")
 
-        # Run C-focused experiments
+        # Run standard experiments
         for tile_size in tile_sizes:
             times = []
             for run in range(num_runs):
@@ -350,8 +334,8 @@ class MatrixTilingStudy:
             cache_optimal = self._estimate_cache_optimality(tile_size)
 
             results['tile_sizes'].append(tile_size)
-            results['c_focused']['times'].append(avg_time)
-            results['c_focused']['time_std'].append(std_time)
+            results['standard']['times'].append(avg_time)
+            results['standard']['time_std'].append(std_time)
 
             print(f"{tile_size:<15} {avg_time:<15.6f} {cache_optimal:<20}")
 
@@ -405,13 +389,13 @@ class MatrixTilingStudy:
         else:
             return "Spills cache"
 
-    def plot_results(self, output_file: str = 'tiling_performance.png', mode: str = 'c_focused'):
+    def plot_results(self, output_file: str = 'tiling_performance.png', mode: str = 'standard'):
         """
         Generate visualization of tiling performance.
 
         Args:
             output_file: Path to save the plot
-            mode: Tiling strategy - 'c_focused', 'a_focused', or 'both'
+            mode: Tiling strategy - 'standard', 'a_focused', or 'both'
         """
         if not self.results:
             print("No results to plot. Run experiment first.")
@@ -420,15 +404,15 @@ class MatrixTilingStudy:
         fig, ax = plt.subplots(figsize=(12, 6))
 
         # Check if we have results for both strategies
-        if mode == 'both' and 'c_focused' in self.results:
+        if mode == 'both' and 'standard' in self.results:
             # Plot both strategies
             tile_sizes = self.results['tile_sizes']
 
-            # Plot C-focused
-            c_times = self.results['c_focused']['times']
-            c_std = self.results['c_focused']['time_std']
-            ax.errorbar(tile_sizes, c_times, yerr=c_std, fmt='o-', linewidth=2,
-                         markersize=8, capsize=5, label='C-tile-focused', color='blue')
+            # Plot standard
+            standard_times = self.results['standard']['times']
+            standard_std = self.results['standard']['time_std']
+            ax.errorbar(tile_sizes, standard_times, yerr=standard_std, fmt='o-', linewidth=2,
+                         markersize=8, capsize=5, label='Standard (C-tile-focused)', color='blue')
 
             # Plot A-focused
             a_times = self.results['a_focused']['times']
@@ -439,7 +423,7 @@ class MatrixTilingStudy:
             title = f'Matrix Multiplication Time vs Tile Size (Both Strategies)\n(Matrix: {self.matrix_size}x{self.matrix_size})'
         else:
             # Plot single strategy
-            mode_name = "C-tile-focused" if mode == 'c_focused' else "A-tile-focused"
+            mode_name = "Standard (C-tile-focused)" if mode == 'standard' else "A-tile-focused"
             tile_sizes = self.results['tile_sizes']
             times = self.results['times']
             time_std = self.results['time_std']
@@ -489,14 +473,12 @@ class MatrixTilingStudy:
 def main():
     """Main entry point."""
     # Configuration
-    MATRIX_SIZE = 1024  # Matrix size - adjust based on your system's memory
+    MATRIX_SIZE = 1024
+    MODE = 'standard'  # 'standard', 'a_focused', or 'both'
 
-    # Tiling strategy: 'c_focused', 'a_focused', or 'both'
-    MODE = 'both'  # Change to compare both strategies
-
-    # Tile sizes to test
-    # Start small and go up to the full matrix size
-    tile_sizes = [1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
+    # Generate tile sizes as powers of 2 from 1 to MATRIX_SIZE
+    tile_sizes = [2**i for i in range(int(np.log2(MATRIX_SIZE)) + 1)]
+    print(f"Testing tile sizes: {min(tile_sizes)} to {max(tile_sizes)} (powers of 2)")
 
     # Create and run study
     study = MatrixTilingStudy(matrix_size=MATRIX_SIZE)
@@ -513,44 +495,45 @@ def main():
 
     if MODE == 'both':
         # Summary for both strategies
-        c_times = results['c_focused']['times']
+        standard_times = results['standard']['times']
         a_times = results['a_focused']['times']
 
-        c_best_idx = np.argmin(c_times)
+        standard_best_idx = np.argmin(standard_times)
         a_best_idx = np.argmin(a_times)
 
-        print(f"\nC-tile-focused:")
-        print(f"  Best performance: Tile size {results['tile_sizes'][c_best_idx]} ({c_times[c_best_idx]:.6f}s)")
-        print(f"  Baseline (tile_size=matrix_size): {c_times[-1]:.6f}s")
-        if c_times[c_best_idx] < c_times[-1]:
-            improvement = (c_times[-1] / c_times[c_best_idx] - 1) * 100
-            print(f"  Speedup from optimal tiling: {improvement:.1f}%")
+        print(f"\nStandard (C-tile-focused):")
+        print(f"  Best performance: Tile size {results['tile_sizes'][standard_best_idx]} ({standard_times[standard_best_idx]:.6f}s)")
+        print(f"  Baseline (largest tile): {standard_times[-1]:.6f}s")
+        if standard_times[standard_best_idx] < standard_times[-1]:
+            improvement = (standard_times[-1] / standard_times[standard_best_idx] - 1) * 100
+            print(f"  Speedup vs baseline: {improvement:.1f}%")
 
         print(f"\nA-tile-focused:")
         print(f"  Best performance: Tile size {results['tile_sizes'][a_best_idx]} ({a_times[a_best_idx]:.6f}s)")
-        print(f"  Baseline (tile_size=matrix_size): {a_times[-1]:.6f}s")
+        print(f"  Baseline (largest tile): {a_times[-1]:.6f}s")
         if a_times[a_best_idx] < a_times[-1]:
             improvement = (a_times[-1] / a_times[a_best_idx] - 1) * 100
-            print(f"  Speedup from optimal tiling: {improvement:.1f}%")
+            print(f"  Speedup vs baseline: {improvement:.1f}%")
 
         # Compare best of each
         print(f"\nComparison:")
-        if c_times[c_best_idx] < a_times[a_best_idx]:
-            diff = (a_times[a_best_idx] / c_times[c_best_idx] - 1) * 100
-            print(f"  C-tile-focused is {diff:.1f}% faster at optimal tile size")
+        if standard_times[standard_best_idx] < a_times[a_best_idx]:
+            diff = (a_times[a_best_idx] / standard_times[standard_best_idx] - 1) * 100
+            print(f"  Standard is {diff:.1f}% faster at optimal tile size")
         else:
-            diff = (c_times[c_best_idx] / a_times[a_best_idx] - 1) * 100
+            diff = (standard_times[standard_best_idx] / a_times[a_best_idx] - 1) * 100
             print(f"  A-tile-focused is {diff:.1f}% faster at optimal tile size")
     else:
         # Summary for single strategy
         best_idx = np.argmin(results['times'])
-        baseline_time = results['times'][-1]
         best_time = results['times'][best_idx]
-        print(f"Best performance: Tile size {results['tile_sizes'][best_idx]} ({best_time:.6f}s)")
-        print(f"Baseline (tile_size=matrix_size): {baseline_time:.6f}s")
+        baseline_time = results['times'][-1]
+
+        print(f"\nBest performance: Tile size {results['tile_sizes'][best_idx]} ({best_time:.6f}s)")
+        print(f"Baseline (largest tile): {baseline_time:.6f}s")
         if best_time < baseline_time:
             improvement = (baseline_time / best_time - 1) * 100
-            print(f"Speedup from optimal tiling: {improvement:.1f}%")
+            print(f"Speedup vs baseline: {improvement:.1f}%")
 
 
 if __name__ == '__main__':
