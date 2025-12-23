@@ -339,6 +339,8 @@ class MatrixTilingStudy:
 
             print(f"{tile_size:<15} {avg_time:<15.6f} {cache_optimal:<20}")
 
+        A = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
+        B = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
         print(f"\n{'='*70}")
         print(f"Running A-tile-focused strategy...")
         print(f"{'='*70}")
@@ -474,14 +476,14 @@ def main():
     """Main entry point."""
     # Configuration
     MODE = 'both'  # 'standard', 'a_focused', or 'both'
-    MATRIX_SIZE = 4096
+    MATRIX_SIZE = 2048
     # Generate tile sizes as powers of 2 from 1 to MATRIX_SIZE
     tile_sizes = [2**i for i in range(int(np.log2(MATRIX_SIZE)) + 1)]
     print(f"Testing tile sizes: {min(tile_sizes)} to {max(tile_sizes)} (powers of 2)")
 
     # Create and run study
     study = MatrixTilingStudy(matrix_size=MATRIX_SIZE)
-    results = study.run_experiment(tile_sizes, num_runs=3, mode=MODE)
+    results = study.run_experiment(tile_sizes, num_runs=2, mode=MODE)
 
     # Generate visualization
     output_filename = f'tiling_performance_{MODE}.png'
