@@ -24,7 +24,7 @@ from numba import jit
 @jit(nopython=True, fastmath=False, parallel=False)
 def _tiled_multiply_jit(A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
     """
-    Tiled matrix multiplication compiled with Numba (C-tile-focused).
+    Tiled matrix multiplication compiled with Numba (C-hot).
 
     Strategy: For each output tile C, load all required A and B tiles to complete it.
     This keeps the output tile hot in cache while streaming through inputs.
@@ -48,9 +48,9 @@ def _tiled_multiply_jit(A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndar
 
 
 @jit(nopython=True, fastmath=False, parallel=False)
-def _tiled_multiply_a_focused_jit(A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
+def _tiled_multiply_a_hot_jit(A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
     """
-    Tiled matrix multiplication compiled with Numba (A-tile-focused).
+    Tiled matrix multiplication compiled with Numba (A-hot).
 
     Strategy: For each A tile, keep it hot in cache and stream through all B tiles,
     updating the corresponding output tiles. This maximizes reuse of each A tile.
@@ -177,19 +177,19 @@ class MatrixTilingStudy:
 
     def _tiled_multiply(self, A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
         """
-        Tiled matrix multiplication with specified tile size - uses Numba JIT (C-tile-focused).
+        Tiled matrix multiplication with specified tile size - uses Numba JIT (C-hot).
 
         Multiplies blocks of size tile_size x tile_size to improve cache locality.
         """
         return _tiled_multiply_jit(A, B, tile_size)
 
-    def _tiled_multiply_a_focused(self, A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
+    def _tiled_multiply_a_hot(self, A: np.ndarray, B: np.ndarray, tile_size: int) -> np.ndarray:
         """
-        Tiled matrix multiplication with specified tile size - uses Numba JIT (A-tile-focused).
+        Tiled matrix multiplication with specified tile size - uses Numba JIT (A-hot).
 
         Keeps A tiles hot in cache while streaming through B tiles.
         """
-        return _tiled_multiply_a_focused_jit(A, B, tile_size)
+        return _tiled_multiply_a_hot_jit(A, B, tile_size)
 
     def run_experiment(self, tile_sizes: List[int], num_runs: int = 3, mode: str = 'standard') -> Dict:
         """
@@ -198,7 +198,7 @@ class MatrixTilingStudy:
         Args:
             tile_sizes: List of tile sizes to test
             num_runs: Number of runs per tile size (for averaging)
-            mode: Tiling strategy - 'standard', 'a_focused', or 'both'
+            mode: Tiling strategy - 'standard', 'a_hot', or 'both'
 
         Returns:
             Dictionary with results
@@ -206,7 +206,7 @@ class MatrixTilingStudy:
         if mode == 'both':
             return self._run_both_experiments(tile_sizes, num_runs)
 
-        mode_name = "Standard (C-tile-focused)" if mode == 'standard' else "A-tile-focused"
+        mode_name = "Standard (C-hot)" if mode == 'standard' else "A-hot"
 
         print(f"\n{'='*70}")
         print(f"Matrix Tiling Performance Study ({mode_name})")
@@ -246,7 +246,7 @@ class MatrixTilingStudy:
         }
 
         # Select multiply function based on mode
-        multiply_func = self._tiled_multiply if mode == 'standard' else self._tiled_multiply_a_focused
+        multiply_func = self._tiled_multiply if mode == 'standard' else self._tiled_multiply_a_hot
 
         # Test each tile size
         for tile_size in tile_sizes:
@@ -311,11 +311,11 @@ class MatrixTilingStudy:
         results = {
             'tile_sizes': [],
             'standard': {'times': [], 'time_std': []},
-            'a_focused': {'times': [], 'time_std': []}
+            'a_hot': {'times': [], 'time_std': []}
         }
 
         print(f"\n{'='*70}")
-        print(f"Running Standard (C-tile-focused) strategy...")
+        print(f"Running Standard (C-hot) strategy...")
         print(f"{'='*70}")
         print(f"{'Tile Size':<15} {'Avg Time (s)':<15} {'Cache-Optimal':<20}")
         print(f"{'-'*65}")
@@ -342,17 +342,17 @@ class MatrixTilingStudy:
         A = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
         B = np.random.randn(self.matrix_size, self.matrix_size).astype(np.float32)
         print(f"\n{'='*70}")
-        print(f"Running A-tile-focused strategy...")
+        print(f"Running A-hot strategy...")
         print(f"{'='*70}")
         print(f"{'Tile Size':<15} {'Avg Time (s)':<15} {'Cache-Optimal':<20}")
         print(f"{'-'*65}")
 
-        # Run A-focused experiments
+        # Run A-hot experiments
         for i, tile_size in enumerate(tile_sizes):
             times = []
             for run in range(num_runs):
                 start = time.perf_counter()
-                C = self._tiled_multiply_a_focused(A, B, tile_size)
+                C = self._tiled_multiply_a_hot(A, B, tile_size)
                 end = time.perf_counter()
                 times.append(end - start)
 
@@ -360,8 +360,8 @@ class MatrixTilingStudy:
             std_time = np.std(times)
             cache_optimal = self._estimate_cache_optimality(tile_size)
 
-            results['a_focused']['times'].append(avg_time)
-            results['a_focused']['time_std'].append(std_time)
+            results['a_hot']['times'].append(avg_time)
+            results['a_hot']['time_std'].append(std_time)
 
             print(f"{tile_size:<15} {avg_time:<15.6f} {cache_optimal:<20}")
 
@@ -397,7 +397,7 @@ class MatrixTilingStudy:
 
         Args:
             output_file: Path to save the plot
-            mode: Tiling strategy - 'standard', 'a_focused', or 'both'
+            mode: Tiling strategy - 'standard', 'a_hot', or 'both'
         """
         if not self.results:
             print("No results to plot. Run experiment first.")
@@ -414,18 +414,18 @@ class MatrixTilingStudy:
             standard_times = self.results['standard']['times']
             standard_std = self.results['standard']['time_std']
             ax.errorbar(tile_sizes, standard_times, yerr=standard_std, fmt='o-', linewidth=2,
-                         markersize=8, capsize=5, label='Standard (C-tile-focused)', color='blue')
+                         markersize=8, capsize=5, label='Standard (C-hot)', color='blue')
 
-            # Plot A-focused
-            a_times = self.results['a_focused']['times']
-            a_std = self.results['a_focused']['time_std']
+            # Plot A-hot
+            a_times = self.results['a_hot']['times']
+            a_std = self.results['a_hot']['time_std']
             ax.errorbar(tile_sizes, a_times, yerr=a_std, fmt='s-', linewidth=2,
-                         markersize=8, capsize=5, label='A-tile-focused', color='red')
+                         markersize=8, capsize=5, label='A-hot', color='red')
 
             title = f'Matrix Multiplication Time vs Tile Size (Both Strategies)\n(Matrix: {self.matrix_size}x{self.matrix_size})'
         else:
             # Plot single strategy
-            mode_name = "Standard (C-tile-focused)" if mode == 'standard' else "A-tile-focused"
+            mode_name = "Standard (C-hot)" if mode == 'standard' else "A-hot"
             tile_sizes = self.results['tile_sizes']
             times = self.results['times']
             time_std = self.results['time_std']
@@ -475,8 +475,8 @@ class MatrixTilingStudy:
 def main():
     """Main entry point."""
     # Configuration
-    MODE = 'both'  # 'standard', 'a_focused', or 'both'
-    MATRIX_SIZE = 2048
+    MODE = 'both'  # 'standard', 'a_hot', or 'both'
+    MATRIX_SIZE = 4096
     # Generate tile sizes as powers of 2 from 1 to MATRIX_SIZE
     tile_sizes = [2**i for i in range(int(np.log2(MATRIX_SIZE)) + 1)]
     print(f"Testing tile sizes: {min(tile_sizes)} to {max(tile_sizes)} (powers of 2)")
@@ -497,19 +497,19 @@ def main():
     if MODE == 'both':
         # Summary for both strategies
         standard_times = results['standard']['times']
-        a_times = results['a_focused']['times']
+        a_times = results['a_hot']['times']
 
         standard_best_idx = np.argmin(standard_times)
         a_best_idx = np.argmin(a_times)
 
-        print(f"\nStandard (C-tile-focused):")
+        print(f"\nStandard (C-hot):")
         print(f"  Best performance: Tile size {results['tile_sizes'][standard_best_idx]} ({standard_times[standard_best_idx]:.6f}s)")
         print(f"  Baseline (largest tile): {standard_times[-1]:.6f}s")
         if standard_times[standard_best_idx] < standard_times[-1]:
             improvement = (standard_times[-1] / standard_times[standard_best_idx] - 1) * 100
             print(f"  Speedup vs baseline: {improvement:.1f}%")
 
-        print(f"\nA-tile-focused:")
+        print(f"\nA-hot:")
         print(f"  Best performance: Tile size {results['tile_sizes'][a_best_idx]} ({a_times[a_best_idx]:.6f}s)")
         print(f"  Baseline (largest tile): {a_times[-1]:.6f}s")
         if a_times[a_best_idx] < a_times[-1]:
@@ -523,7 +523,7 @@ def main():
             print(f"  Standard is {diff:.1f}% faster at optimal tile size")
         else:
             diff = (standard_times[standard_best_idx] / a_times[a_best_idx] - 1) * 100
-            print(f"  A-tile-focused is {diff:.1f}% faster at optimal tile size")
+            print(f"  A-hot is {diff:.1f}% faster at optimal tile size")
     else:
         # Summary for single strategy
         best_idx = np.argmin(results['times'])

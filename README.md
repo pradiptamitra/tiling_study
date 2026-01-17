@@ -7,8 +7,8 @@ A Python study demonstrating how tiling (blocking) improves memory access perfor
 This project analyzes the performance impact of different tile sizes on matrix multiplication operations. By breaking matrices into smaller tiles that fit within CPU caches (L1, L2, L3), we can improve performance by reducing cache misses and improving data reuse.
 
 The study implements and compares two tiling strategies:
-- **Standard (C-tile-focused)**: Keeps output tiles hot in cache
-- **A-tile-focused**: Keeps input A tiles hot in cache (experimental)
+- **Standard (C-hot)**: Keeps output tiles hot in cache
+- **A-hot**: Keeps input A tiles hot in cache (experimental)
 
 ## Features
 
@@ -19,7 +19,7 @@ The study implements and compares two tiling strategies:
 
 ## How Tiling Works
 
-### Standard Tiling (C-tile-focused)
+### Standard Tiling (C-hot)
 The standard approach keeps the output tile in cache while streaming through inputs:
 ```python
 for i_tile in range(0, n, tile_size):
@@ -35,7 +35,7 @@ for i_tile in range(0, n, tile_size):
 
 **Strategy**: For each output tile C, load all required A and B tiles to complete it. This keeps the output tile hot in cache while streaming through inputs.
 
-### A-tile-focused Tiling (Experimental)
+### A-hot Tiling (Experimental)
 An alternative approach that maximizes reuse of each A tile:
 ```python
 for i_tile in range(0, n, tile_size):
@@ -57,7 +57,7 @@ for i_tile in range(0, n, tile_size):
 
 - `matrix_tiling_study.py`: Main study script with performance benchmarking
 - `tiling_performance_standard.png`: Performance visualization for standard strategy
-- `tiling_performance_a_focused.png`: Performance visualization for A-focused strategy
+- `tiling_performance_a_hot.png`: Performance visualization for A-hot strategy
 - `tiling_performance_both.png`: Comparison visualization for both strategies
 
 ## Requirements
@@ -75,9 +75,9 @@ The script supports three modes controlled by the `MODE` variable in `main()`:
 MODE = 'standard'
 ```
 
-### Run A-focused Strategy Only
+### Run A-hot Strategy Only
 ```python
-MODE = 'a_focused'
+MODE = 'a_hot'
 ```
 
 ### Compare Both Strategies
@@ -94,7 +94,7 @@ python matrix_tiling_study.py
 
 Key parameters in `main()`:
 - `MATRIX_SIZE`: Size of square matrices (default: 1024)
-- `MODE`: Tiling strategy - 'standard', 'a_focused', or 'both'
+- `MODE`: Tiling strategy - 'standard', 'a_hot', or 'both'
 - `tile_sizes`: List of tile sizes to test
 
 ## Output
@@ -111,7 +111,7 @@ The script produces:
    - Execution time vs tile size with error bars
    - For 'both' mode: Overlaid comparison of both strategies
    - Vertical dashed lines marking optimal tile sizes for L1, L2, L3 caches
-   - Color coding: Blue (Standard), Red (A-focused)
+   - Color coding: Blue (Standard), Red (A-hot)
 
 ## Cache Optimality
 
@@ -147,7 +147,7 @@ L2 Cache: 512.00 KB (524288 bytes)
 L3 Cache: 8.00 MB (8388608 bytes)
 
 ======================================================================
-Running Standard (C-tile-focused) strategy...
+Running Standard (C-hot) strategy...
 ======================================================================
 Tile Size       Avg Time (s)    Cache-Optimal
 -----------------------------------------------------------------
@@ -163,7 +163,7 @@ Tile Size       Avg Time (s)    Cache-Optimal
 1024            0.234567        Spills cache
 
 ======================================================================
-Running A-tile-focused strategy...
+Running A-hot strategy...
 ======================================================================
 Tile Size       Avg Time (s)    Cache-Optimal
 -----------------------------------------------------------------
@@ -182,12 +182,12 @@ Tile Size       Avg Time (s)    Cache-Optimal
 Summary:
 ======================================================================
 
-Standard (C-tile-focused):
+Standard (C-hot):
   Best performance: Tile size 64 (0.054321s)
   Baseline (largest tile): 0.234567s
   Speedup vs baseline: 331.8%
 
-A-tile-focused:
+A-hot:
   Best performance: Tile size 64 (0.055432s)
   Baseline (largest tile): 0.235678s
   Speedup vs baseline: 325.2%
